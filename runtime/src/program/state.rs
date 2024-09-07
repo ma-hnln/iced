@@ -1,3 +1,5 @@
+use iced_core::Element;
+
 use crate::core::event::{self, Event};
 use crate::core::mouse;
 use crate::core::renderer;
@@ -78,6 +80,93 @@ where
     /// Returns the current [`mouse::Interaction`] of the [`State`].
     pub fn mouse_interaction(&self) -> mouse::Interaction {
         self.mouse_interaction
+    }
+
+    /// Handle all queued events.
+    ///
+    /// Return all messages explicitly queued or created from queued events.
+    pub fn process_events<'a>(
+        &mut self,
+        view: Element<'a, P::Message, P::Theme, P::Renderer>,
+        bounds: Size,
+        cursor: mouse::Cursor,
+        renderer: &mut P::Renderer,
+        clipboard: &mut dyn Clipboard,
+        debug: &mut Debug,
+    ) -> (
+        UserInterface<'a, P::Message, P::Theme, P::Renderer>,
+        Vec<P::Message>,
+        Vec<Event>,
+    ) {
+        debug.layout_started();
+        let mut user_interface = UserInterface::build(
+            view,
+            bounds,
+            self.cache.take().unwrap(),
+            renderer,
+        );
+        debug.layout_finished();
+
+        debug.event_processing_started();
+        let mut messages = Vec::new();
+
+        let (_, event_statuses) = user_interface.update(
+            &self.queued_events,
+            cursor,
+            renderer,
+            clipboard,
+            &mut messages,
+        );
+
+        let uncaptured_events = self
+            .queued_events
+            .iter()
+            .zip(event_statuses)
+            .filter_map(|(event, status)| {
+                matches!(status, event::Status::Ignored).then_some(event)
+            })
+            .cloned()
+            .collect();
+
+        self.queued_events.clear();
+        messages.append(&mut self.queued_messages);
+        debug.event_processing_finished();
+
+        (user_interface, messages, uncaptured_events)
+    }
+
+    /// Some doc...
+    pub fn apply_view(
+        &mut self,
+        previous_user_interface: UserInterface<
+            '_,
+            P::Message,
+            P::Theme,
+            P::Renderer,
+        >,
+        view: Element<'_, P::Message, P::Theme, P::Renderer>,
+        bounds: Size,
+        cursor: mouse::Cursor,
+        renderer: &mut P::Renderer,
+        theme: &P::Theme,
+        style: &renderer::Style,
+        debug: &mut Debug,
+    ) {
+        // When there are messages, we are forced to rebuild twice
+        // for now :^)
+        let cache = previous_user_interface.into_cache();
+
+        debug.layout_started();
+        let mut user_interface =
+            UserInterface::build(view, bounds, cache, renderer);
+        debug.layout_finished();
+
+        debug.draw_started();
+        self.mouse_interaction =
+            user_interface.draw(renderer, theme, style, cursor);
+        debug.draw_finished();
+
+        self.cache = Some(user_interface.into_cache());
     }
 
     /// Processes all the queued events and messages, rebuilding and redrawing
